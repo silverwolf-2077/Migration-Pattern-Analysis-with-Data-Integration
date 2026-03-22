@@ -48,17 +48,17 @@ migration_raw = map_dfr(files, read_migration_file) |>
   arrange(dest_state_fips, dest_county_fips, orig_state_fips, orig_county_fips)
 ```
 
-## 1
+# 1
 
 Identify the county pairs with the most interactions (by number of exemptions).
 
-### Method
+## Method
 
 Before analyzing migration patterns, I removed rows that did not represent meaningful county-to-county migration. Specifically, I excluded summary rows where orig_state_fips > 56, since these rows correspond to aggregated categories rather than actual U.S. counties. I also removed rows where the origin and destination counties were the same, because this project focuses on migration between counties rather than within-county records.
 
 To identify the county pairs with the most interactions, I first created standardized county identifiers by concatenating state and county FIPS codes for both origin and destination counties. Because county-to-county migration is directional in the raw data, I reordered each pair using `pmin()` and `pmax()` so that flows between the same two counties would be treated as one undirected county pair. I then aggregated the number of exemptions across each pair and ranked the pairs from highest to lowest interaction.
 
-To make the output interpretable, I also created a county lookup table from the non-migrant rows in the original dataset. I then joined this lookup table back to the ranked county pairs so that the final results included both FIPS codes and county names.
+To make the output more interpretable, I sourced an external county FIPS crosswalk file and used it to match county names to the county FIPS codes in the migration dataset. I then joined this lookup table back to the ranked county pairs so that the final results included both FIPS codes and county names.
 
 ```{r}
 # get rid of the summary rows and non-migration rows
@@ -89,16 +89,13 @@ county_pairs = migration_df |>
 
 ```{r}
 # create a county name lookup table
-county_lookup = 
-  migration_raw |> 
-  filter(dest_state_fips == orig_state_fips & dest_county_fips == orig_county_fips) |>
-  mutate(
-    county_fips = paste0(dest_state_fips, dest_county_fips),
-    county_name = str_remove(flow_description, " Non-Migrants$"),
-    county_state = paste0(county_name, ", ", state_abbr)
-  ) |>
-  select(dest_state_fips, dest_county_fips, county_fips, state_abbr, county_state) |>
-  distinct()
+county_lookup = read_csv("County FIPS codes.csv") |>
+  transmute(
+    county_fips = str_pad(as.character(`County FIPS Code`), width = 5, side = "left", pad = "0"),
+    state_fips = str_pad(as.character(`State FIPS code`), width = 2, side = "left", pad = "0"),
+    county_state = str_replace(County, ",.*$", "") |> str_c(", ", State)
+  ) |> 
+  janitor::clean_names()
 
 # join county names to each county pair
 top_pairs_named = county_pairs |>
@@ -106,7 +103,6 @@ top_pairs_named = county_pairs |>
     county_lookup |>
       rename(
         pair_1_fips = county_fips,
-        pair_1_state = state_abbr,
         pair_1_county = county_state
       ),
     by = "pair_1_fips"
@@ -115,7 +111,6 @@ top_pairs_named = county_pairs |>
     county_lookup |>
       rename(
         pair_2_fips = county_fips,
-        pair_2_state = state_abbr,
         pair_2_county = county_state
       ),
     by = "pair_2_fips"
@@ -127,16 +122,16 @@ top_pairs_named |>
   knitr::kable(caption = "Table 1. Top 5 county pairs by total exemptions") |> 
   kableExtra::kable_styling(full_width = FALSE)
 ```
-### Result
+## Result
 
 The the county pairs with the most interactions (by number of exemptions) are shown in Table 1.
 
 
-## 2
+# 2
 
 Determine which counties show the highest in-migration and out-migration.
 
-### Method
+## Method
 
 To identify the counties with the highest in-migration and out-migration, I aggregated migration flows at the county level using the number of exemptions as the measure of migration volume. Specifically, I summed exemptions across all records for each destination county (dest_fips) to measure total in-migration, and across all records for each origin county (orig_fips) to measure total out-migration. After ranking counties in descending order of total exemptions, I joined the results with the county lookup table to attach readable county names and state abbreviations.
 
@@ -171,16 +166,16 @@ top_out_migration |>
   knitr::kable(caption = "Table 3. Counties with the highest out-migration") |> 
   kableExtra::kable_styling(full_width = FALSE)
 ```
-### Result
+## Result
 
 Table 2 shows counties with the highest in-migration, and Table 3 shows counties with the highest out-migration.
 
 
-## 3
+# 3
 
 Calculate net migration for the New York metropolitan area.
 
-### Method
+## Method
 
 I defined the New York metropolitan area using the current metropolitan county classification. I used ChatGPT to help identify the counties in the metropolitan area and their corresponding FIPS codes. Based on these county FIPS codes, I identified migration flows crossing the metropolitan boundary. Inflows were defined as flows from outside the metropolitan area into it, and outflows were defined as flows from the metropolitan area to outside it. Net migration was calculated as inflow minus outflow.
 
@@ -240,15 +235,65 @@ ny_metro_net_migration |>
   kableExtra::kable_styling()
 ```
 
-### Result
+## Result
 
 As shown in Table 4, the New York metropolitan area had 128,931 inflows and 265,940 outflows, resulting in a net migration of -137,009. This indicates an overall net out-migration.
 
 
-## 4
+# 4
 
 __Data Enrichment Challenge:__ Using publicly available GenAI tools, augment this migration data with at least three additional contextual data points (economic indicators, demographic information, etc.) that help explain the migration patterns.
 
+migration patterns: county pair, in-flow, out-flow, net flow, flow income, personal flow income
+
+factors: median household income, unemployment rate, Rural-Urban Continuum Code, housing rent, population
+
+Import the contextual datasets.
+
+```{r}
+income_df = read_excel(
+  "contextual data/est03all.xls", skip = 1) |>
+  janitor::clean_names() |>
+  mutate(
+    state_fips = str_pad(state_fips, width = 2, side = "left", pad = "0"),
+    county_fips = str_pad(county_fips, width = 3, side = "left", pad = "0"),
+    state_county_fips = str_c(state_fips, county_fips)
+  ) |> 
+  rename(
+    income_ci_lower = x90_percent_ci_lower_bound,
+    income_ci_upper = x90_percent_ci_upper_bound
+  )
+
+rent_df = read_excel("contextual data/FY2003_50Rents_County.xls") |> 
+  janitor::clean_names() |> 
+  mutate(
+    state_fips = str_pad(state, width = 2, side = "left", pad = "0"),
+    county_fips = str_pad(county, width = 3, side = "left", pad = "0"),
+    state_county_fips = str_c(state_fips, county_fips))
+
+unemp_df = read_excel("contextual data/laucnty03.xlsx", skip = 1) |> 
+  janitor::clean_names() |> 
+  rename(
+    state_fips = state_fips_code,
+    county_fips = county_fips_code,
+    umemp_percent = unemployment_rate_percent
+  ) |> 
+  mutate(state_county_fips = str_c(state_fips, county_fips))
+  
+rucc_df = read_excel("contextual data/ruralurbancodes2003.xls") |> 
+  janitor::clean_names() |> 
+  select(-x1993_rural_urban_continuum_code) |>
+  rename(
+    rucc = x2003_rural_urban_continuum_code,
+    population = x2000_population
+  )
+```
+
+## Model in-flow on unemployment rate, Rural-Urban Continuum Code and housing rent
+
+```{r}
+
+```
 
 
 
