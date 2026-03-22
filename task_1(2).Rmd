@@ -1,0 +1,182 @@
+---
+title: "Migration Pattern Analysis with Data Integration"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(readxl)
+```
+
+Import, clean and merge the datasets.
+
+```{r}
+files = list.files(
+  "migration",
+  pattern = "\\.xls$",
+  full.names = TRUE,
+  ignore.case = TRUE
+)
+
+read_migration_file = function(file_path) {
+  read_excel(
+    file_path,
+    skip = 8,
+    col_names = c(
+      "dest_state_fips",
+      "dest_county_fips",
+      "orig_state_fips",
+      "orig_county_fips",
+      "state_abbr",
+      "flow_description",
+      "returns",
+      "exemptions",
+      "income_thousands"
+    ),
+    col_types = rep("text", 9)
+  ) |>
+    mutate(
+      returns = parse_number(returns),
+      exemptions = parse_number(exemptions),
+      income_thousands = parse_number(income_thousands)
+    )
+}
+
+migration_raw = map_dfr(files, read_migration_file) |> 
+  arrange(dest_state_fips, dest_county_fips, orig_state_fips, orig_county_fips)
+```
+
+## 1
+
+Identify the county pairs with the most interactions (by number of exemptions).
+
+### Method
+
+Before analyzing migration patterns, I removed rows that did not represent meaningful county-to-county migration. Specifically, I excluded summary rows where orig_state_fips > 56, since these rows correspond to aggregated categories rather than actual U.S. counties. I also removed rows where the origin and destination counties were the same, because this project focuses on migration between counties rather than within-county records.
+
+To identify the county pairs with the most interactions, I first created standardized county identifiers by concatenating state and county FIPS codes for both origin and destination counties. Because county-to-county migration is directional in the raw data, I reordered each pair using `pmin()` and `pmax()` so that flows between the same two counties would be treated as one undirected county pair. I then aggregated the number of exemptions across each pair and ranked the pairs from highest to lowest interaction.
+
+To make the output interpretable, I also created a county lookup table from the non-migrant rows in the original dataset. I then joined this lookup table back to the ranked county pairs so that the final results included both FIPS codes and county names.
+
+```{r}
+# get rid of the summary rows and non-migration rows
+migration_df = migration_raw |> 
+  filter(
+    orig_state_fips <= 56,
+    !(dest_state_fips == orig_state_fips & dest_county_fips == orig_county_fips)
+  ) |> 
+  mutate(
+    # create unique FIPS codes for each county
+    dest_fips = paste0(dest_state_fips, dest_county_fips),
+    orig_fips = paste0(orig_state_fips, orig_county_fips))
+
+county_pairs = migration_df |>
+  mutate(
+    # create county pairs
+    pair_1_fips = pmin(orig_fips, dest_fips),
+    pair_2_fips = pmax(orig_fips, dest_fips)
+  ) |>
+  # sum exemptions for each county pair
+  group_by(pair_1_fips, pair_2_fips) |>
+  summarise(
+    total_exemptions = sum(exemptions, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_exemptions))
+```
+
+```{r}
+# create a county name lookup table
+county_lookup = 
+  migration_raw |> 
+  filter(dest_state_fips == orig_state_fips & dest_county_fips == orig_county_fips) |>
+  mutate(
+    county_fips = paste0(dest_state_fips, dest_county_fips),
+    county_name = str_remove(flow_description, " Non-Migrants$"),
+    county_state = paste0(county_name, ", ", state_abbr)
+  ) |>
+  select(dest_state_fips, dest_county_fips, county_fips, state_abbr, county_state) |>
+  distinct()
+
+# join county names to each county pair
+top_pairs_named = county_pairs |>
+  left_join(
+    county_lookup |>
+      rename(
+        pair_1_fips = county_fips,
+        pair_1_state = state_abbr,
+        pair_1_county = county_state
+      ),
+    by = "pair_1_fips"
+  ) |>
+  left_join(
+    county_lookup |>
+      rename(
+        pair_2_fips = county_fips,
+        pair_2_state = state_abbr,
+        pair_2_county = county_state
+      ),
+    by = "pair_2_fips"
+  ) |> 
+  select(pair_1_fips, pair_1_county, pair_2_fips, pair_2_county, total_exemptions)
+
+top_pairs_named |> 
+  head(5) |> 
+  knitr::kable(caption = "Table 1. Top 5 county pairs by total exemptions") |> 
+  kableExtra::kable_styling(full_width = FALSE)
+```
+
+
+## 2
+
+Determine which counties show the highest in-migration and out-migration.
+
+### Method
+
+To identify the counties with the highest in-migration and out-migration, I aggregated migration flows at the county level using the number of exemptions as the measure of migration volume. Specifically, I summed exemptions across all records for each destination county (dest_fips) to measure total in-migration, and across all records for each origin county (orig_fips) to measure total out-migration. After ranking counties in descending order of total exemptions, I joined the results with the county lookup table to attach readable county names and state abbreviations.
+
+```{r}
+# counties with the highest in-migration
+top_in_migration = migration_df |>
+  group_by(dest_fips) |>
+  summarise(
+    total_in_exemptions = sum(exemptions, na.rm = TRUE)
+  ) |>
+  arrange(desc(total_in_exemptions)) |> 
+  left_join(county_lookup, by = c("dest_fips" = "county_fips")) |> 
+  select(dest_fips, county_state, total_in_exemptions)
+
+top_in_migration |> 
+  head(5) |> 
+  knitr::kable(caption = "Table 2. Counties with the highest in-migration") |> 
+  kableExtra::kable_styling(full_width = FALSE)
+
+# counties with the highest out-migration
+top_out_migration = migration_df |>
+  group_by(orig_fips) |>
+  summarise(
+    total_out_exemptions = sum(exemptions, na.rm = TRUE)
+  ) |>
+  arrange(desc(total_out_exemptions)) |> 
+  left_join(county_lookup, by = c("orig_fips" = "county_fips")) |> 
+  select(orig_fips, county_state, total_out_exemptions)
+
+top_out_migration |> 
+  head(5) |> 
+  knitr::kable(caption = "Table 3. Counties with the highest out-migration") |> 
+  kableExtra::kable_styling(full_width = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
