@@ -127,6 +127,9 @@ top_pairs_named |>
   knitr::kable(caption = "Table 1. Top 5 county pairs by total exemptions") |> 
   kableExtra::kable_styling(full_width = FALSE)
 ```
+### Result
+
+The the county pairs with the most interactions (by number of exemptions) are shown in Table 1.
 
 
 ## 2
@@ -168,6 +171,83 @@ top_out_migration |>
   knitr::kable(caption = "Table 3. Counties with the highest out-migration") |> 
   kableExtra::kable_styling(full_width = FALSE)
 ```
+### Result
+
+Table 2 shows counties with the highest in-migration, and Table 3 shows counties with the highest out-migration.
+
+
+## 3
+
+Calculate net migration for the New York metropolitan area.
+
+### Method
+
+I defined the New York metropolitan area using the current metropolitan county classification. I used ChatGPT to help identify the counties in the metropolitan area and their corresponding FIPS codes. Based on these county FIPS codes, I identified migration flows crossing the metropolitan boundary. Inflows were defined as flows from outside the metropolitan area into it, and outflows were defined as flows from the metropolitan area to outside it. Net migration was calculated as inflow minus outflow.
+
+```{r}
+# the FIPS codes of metropolitan area counties
+ny_metro_fips = c(
+  "36005", # Bronx County, NY
+  "36047", # Kings County, NY
+  "36061", # New York County, NY
+  "36081", # Queens County, NY
+  "36085", # Richmond County, NY
+  "36119", # Westchester County, NY
+  "34003", # Bergen County, NJ
+  "34017", # Hudson County, NJ
+  "34031", # Passaic County, NJ
+  "36087", # Rockland County, NY
+  "36079", # Putnam County, NY
+  "36059", # Nassau County, NY
+  "36103", # Suffolk County, NY
+  "34023", # Middlesex County, NJ
+  "34025", # Monmouth County, NJ
+  "34029", # Ocean County, NJ
+  "34035", # Somerset County, NJ
+  "34013", # Essex County, NJ
+  "34039", # Union County, NJ
+  "34027", # Morris County, NJ
+  "34037", # Sussex County, NJ
+  "34019"  # Hunterdon County, NJ
+)
+
+ny_metro_net_migration = migration_df |>
+  # Keep only flows crossing the metro boundary:
+  # 1) inflow: from outside the metro into the metro
+  # 2) outflow: from the metro to outside the metro
+  filter(
+    (dest_fips %in% ny_metro_fips & !orig_fips %in% ny_metro_fips) |
+    (orig_fips %in% ny_metro_fips & !dest_fips %in% ny_metro_fips)
+  ) |>
+  mutate(
+    flow_type = case_when(
+      dest_fips %in% ny_metro_fips & !orig_fips %in% ny_metro_fips ~ "inflow",
+      orig_fips %in% ny_metro_fips & !dest_fips %in% ny_metro_fips ~ "outflow"
+    )
+  ) |>
+  # Sum exemptions for inflows and outflows separately
+  group_by(flow_type) |>
+  summarise(total_exemptions = sum(exemptions, na.rm = TRUE)) |>
+  pivot_wider(
+    names_from = flow_type,
+    values_from = total_exemptions,
+    values_fill = 0
+  ) |>
+  mutate(net_migration = inflow - outflow)
+
+ny_metro_net_migration |> 
+  knitr::kable(caption = "Table 4. Net migration for the New York Metropolitan Area") |> 
+  kableExtra::kable_styling()
+```
+
+### Result
+
+As shown in Table 4, the New York metropolitan area had 128,931 inflows and 265,940 outflows, resulting in a net migration of -137,009. This indicates an overall net out-migration.
+
+
+## 4
+
+__Data Enrichment Challenge:__ Using publicly available GenAI tools, augment this migration data with at least three additional contextual data points (economic indicators, demographic information, etc.) that help explain the migration patterns.
 
 
 
