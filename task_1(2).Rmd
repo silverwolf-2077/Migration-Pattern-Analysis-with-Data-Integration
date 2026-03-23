@@ -8,6 +8,25 @@ editor_options:
 ```{r setup, include=FALSE}
 library(tidyverse)
 library(readxl)
+library(patchwork)
+library(splines)
+library(mgcv)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
 ```
 
 Import, clean and merge the datasets.
@@ -246,7 +265,7 @@ __Data Enrichment Challenge:__ Using publicly available GenAI tools, augment thi
 
 migration patterns: county pair, in-flow, out-flow, net flow, flow income, personal flow income
 
-factors: median household income, unemployment rate, Rural-Urban Continuum Code, housing rent, population
+factors: median household income, unemployment rate, Rural-Urban Continuum Code, housing rent, population, male-female ratio, young ratio
 
 Import the contextual datasets.
 
@@ -276,7 +295,7 @@ unemp_df = read_excel("contextual data/laucnty03.xlsx", skip = 1) |>
   rename(
     state_fips = state_fips_code,
     county_fips = county_fips_code,
-    umemp_percent = unemployment_rate_percent
+    unemp_percent = unemployment_rate_percent
   ) |> 
   mutate(state_county_fips = str_c(state_fips, county_fips))
   
@@ -287,13 +306,313 @@ rucc_df = read_excel("contextual data/ruralurbancodes2003.xls") |>
     rucc = x2003_rural_urban_continuum_code,
     population = x2000_population
   )
+
+pop_est = read_csv(
+  "contextual data/population_est.csv",
+  show_col_types = FALSE
+) |>
+  janitor::clean_names() |>
+  mutate(
+    state = stringr::str_pad(as.character(state), 2, pad = "0"),
+    county = stringr::str_pad(as.character(county), 3, pad = "0"),
+    county_fips = paste0(state, county)
+  ) |>
+  group_by(county_fips, stname, ctyname) |>
+  summarise(
+    sex_ratio =
+      first(popestimate2003[sex == 1 & agegrp == 0]) /
+      first(popestimate2003[sex == 2 & agegrp == 0]),
+    young_share =
+      sum(popestimate2003[sex == 0 & agegrp %in% 5:7]) /
+      first(popestimate2003[sex == 0 & agegrp == 0]),
+    .groups = "drop"
+  ) |>
+  select(county_fips, sex_ratio, young_share)
 ```
 
-## Model in-flow on unemployment rate, Rural-Urban Continuum Code and housing rent
+
+## Factors affecting gross migration
+
+Calculate gross migration for each county.
 
 ```{r}
-
+gross_flow = full_join(
+  top_out_migration,
+  top_in_migration,
+  by = c("orig_fips" = "dest_fips"),
+  suffix = c("_out", "_in")
+) |>
+  mutate(
+    county_fips = orig_fips,
+    county_state = coalesce(county_state_out, county_state_in),
+    total_out_exemptions = replace_na(total_out_exemptions, 0),
+    total_in_exemptions = replace_na(total_in_exemptions, 0),
+    gross_flow = total_out_exemptions + total_in_exemptions
+  ) |> 
+  select(county_fips, county_state, total_out_exemptions, total_in_exemptions, gross_flow) |> 
+  arrange(desc(gross_flow))
 ```
+
+Join the factors table on the gross migration table.
+
+```{r}
+gross_flow_joined = gross_flow |>
+  left_join(
+    income_df |>
+      select(
+        state_county_fips,
+        median_household_income
+      ),
+    by = c("county_fips" = "state_county_fips")
+  ) |>
+  left_join(
+    unemp_df |>
+      select(
+        state_county_fips,
+        unemp_percent
+      ),
+    by = c("county_fips" = "state_county_fips")
+  ) |>
+  left_join(
+    rucc_df |>
+      select(
+        fips_code,
+        population,
+        rucc
+      ),
+    by = c("county_fips" = "fips_code")
+  ) |>
+  left_join(
+    rent_df |>
+      select(
+        state_county_fips,
+        rent50_2
+      ),
+    by = c("county_fips" = "state_county_fips")
+  ) |> 
+  left_join(
+    pop_est,
+    by = "county_fips"
+  ) |>
+  mutate(
+    across(
+      c(
+        median_household_income,
+        unemp_percent,
+        population,
+        rucc,
+        rent50_2
+      ),
+      ~ readr::parse_number(as.character(.x))
+    ),
+    gross_flow_rate = gross_flow / population * 1000
+  )
+```
+
+### EDA
+
+Distribution of gross flow:
+
+```{r}
+ggplot(gross_flow_joined, aes(x = population, y = gross_flow)) +
+  geom_point(alpha = 0.3) +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_bw()
+```
+Gross flow is highly correlated with population, so we use gross flow rate instead.
+
+Distribution of gross flow rate:
+
+```{r}
+ggplot(gross_flow_joined, aes(x = gross_flow_rate)) +
+  geom_density(fill = "grey") +
+  theme_bw() +
+  labs(
+    title = "Density of Gross Flow Rate",
+    x = "Gross flow (per 1000)",
+    y = "Density"
+  )
+```
+
+Distribution of the continuous variables:
+
+```{r}
+eda_long = gross_flow_joined |>
+  select(
+    median_household_income,
+    unemp_percent,
+    rent50_2,
+    population,
+    sex_ratio,
+    young_share
+  ) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(eda_long, aes(x = value)) +
+  geom_density(fill = "steelblue") +
+  facet_wrap(~ variable, scales = "free", ncol = 2) +
+  labs(
+    x = NULL,
+    y = "Density",
+    title = "Distributions of raw continuous variables"
+  ) +
+  theme_minimal()
+```
+Distribution of the categorical variable:
+
+```{r}
+ggplot(gross_flow_joined, aes(x = as.factor(rucc))) +
+  geom_bar() +
+  theme_bw() +
+  labs(
+    title = "Distribution of RUCC",
+    x = "RUCC",
+    y = "Count"
+  )
+```
+
+According to the EDA results, some variables distributions are skewed and need to be taken logarithm.
+
+```{r}
+analysis_df = 
+  gross_flow_joined |> 
+  mutate(
+      rucc = factor(rucc),
+      log_income = log(median_household_income),
+      log_rent = log(rent50_2),
+      log_population = log(population)
+    )
+
+# density plot after taking log
+eda_long_2 = analysis_df |>
+  select(
+    log_income,
+    log_rent,
+    log_population
+  ) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(eda_long_2, aes(x = value)) +
+  geom_density(fill = "steelblue") +
+  facet_wrap(~ variable, scales = "free", ncol = 2) +
+  labs(
+    x = NULL,
+    y = "Density",
+    title = "Distributions of adjusted continuous variables"
+  ) +
+  theme_minimal()
+```
+
+Find out the relationship between gross flow and the predictors.
+
+```{r}
+analysis_df |>
+  select(gross_flow_rate, log_income, unemp_percent, log_rent, log_population, sex_ratio, young_share) |> 
+  pivot_longer(
+    cols = c(log_income, unemp_percent, log_rent, log_population, sex_ratio, young_share),
+    names_to = "predictor",
+    values_to = "x"
+  ) |>
+  ggplot(aes(x = x, y = gross_flow_rate)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~predictor, scales = "free_x") +
+  theme_bw()
+```
+```{r}
+y_upper = quantile(analysis_df$gross_flow_rate, 0.99, na.rm = TRUE)
+
+ggplot(analysis_df, aes(x = factor(rucc), y = gross_flow_rate)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(width = 0.2, alpha = 0.2, size = 0.8) + 
+  coord_cartesian( 
+    ylim = c(min(analysis_df$gross_flow_rate, na.rm = TRUE),
+             y_upper) ) + 
+  theme_bw() + 
+  labs( title = "Gross Flow by RUCC", 
+        x = "RUCC", 
+        y = "Gross Flow Rate" )
+```
+
+Based on the exploratory plots, I decided to retain log_income, log_population, log_rent, young_share, and RUCC for the model. These variables all showed at least some visible relationship with gross flow rate and are also substantively relevant to migration patterns. In particular, log_income, log_population, and young_share showed clearer positive trends, while log_rent and RUCC still appeared informative enough to keep for further modeling.
+
+I decided to remove sex_ratio and unemp_percent from the main model. The scatterplots suggested that sex_ratio had little clear association with gross flow rate, and unemp_percent also showed only a weak and inconsistent pattern. Since both variables appeared to contribute limited explanatory value at the EDA stage, they were excluded to keep the model more focused and interpretable.
+
+### Correlation Analysis
+
+```{r}
+cor_mat = analysis_df |>
+  select(
+    log_income,
+    rucc,
+    log_rent,
+    log_population,
+    young_share
+  ) |>
+  drop_na() |>
+  mutate(
+    rucc = as.numeric(as.character(rucc))
+  ) |>
+  cor(method = "spearman")
+
+cor_long = as.data.frame(as.table(cor_mat))
+
+ggplot(cor_long, aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Freq, 2)), size = 4) +
+  scale_fill_gradient2(
+    low = "#2166ac",
+    mid = "white",
+    high = "#b2182b",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    fill = "Spearman\ncorrelation",
+    title = "Correlation among analysis variables"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+Based on the correlation analysis, log_population was excluded from the final model because it showed the strongest correlation with another predictor, rucc (Spearman ρ = -0.74). This suggested potential redundancy, so I retained log_income, rucc, log_rent, and young_share for modeling.
+
+Fit model and do VIF analysis:
+
+```{r}
+fit_gam_nb = mgcv::gam(
+  gross_flow ~ log_income + rucc +
+    s(log_rent) +
+    s(young_share) +
+    offset(log(population)),
+  family = nb(),
+  data = count_df,
+  method = "REML"
+)
+
+summary(fit_gam_nb)
+plot(fit_gam_nb, pages = 1)
+```
+
+
+
+
+
+
+
 
 
 
