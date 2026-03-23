@@ -263,11 +263,11 @@ As shown in Table 4, the New York metropolitan area had 128,931 inflows and 265,
 
 __Data Enrichment Challenge:__ Using publicly available GenAI tools, augment this migration data with at least three additional contextual data points (economic indicators, demographic information, etc.) that help explain the migration patterns.
 
-migration patterns: county pair, in-flow, out-flow, net flow, flow income, personal flow income
+## Method
 
-factors: median household income, unemployment rate, Rural-Urban Continuum Code, housing rent, population, male-female ratio, young ratio
+### Data enrichment and contextual variables
 
-Import the contextual datasets.
+To better explain county-level migration patterns, I augmented the migration dataset with multiple county-level contextual variables from external public sources. To guide this process, I used ChatGPT to help brainstorm which contextual factors might plausibly influence migration patterns and to assist in identifying relevant online public databases. Based on this process, I selected median household income, unemployment rate, Rural-Urban Continuum Code (RUCC), county-level housing rent, total population, sex ratio, and the share of young residents as candidate explanatory variables. RUCC is a county-level classification that captures the degree of urbanization and proximity to metropolitan areas, ranging from 1 to 9. Codes 1 to 3 represent metropolitan counties of different population sizes, while codes 4 to 9 represent nonmetropolitan counties that differ by urban population size and whether they are adjacent to a metropolitan area. Each contextual dataset was cleaned separately, with county identifiers standardized to five-digit FIPS codes before merging. Median household income, unemployment rate, rental cost, and RUCC were linked directly by county FIPS, while sex ratio and young population share were derived from the county population estimates file. Specifically, sex ratio was calculated as the ratio of male to female population in 2003, and young population share was defined as the proportion of residents in the younger age groups relative to the total county population.
 
 ```{r}
 income_df = read_excel(
@@ -330,10 +330,9 @@ pop_est = read_csv(
   select(county_fips, sex_ratio, young_share)
 ```
 
+### Outcome construction
 
-## Factors affecting gross migration
-
-Calculate gross migration for each county.
+To study the determinants of migration intensity at the county level, I constructed a measure of gross migration flow for each county. County-level out-migration and in-migration totals were first combined using a full join, and missing in-flow or out-flow values were replaced with zero. Gross flow was then defined as the sum of total in-migration exemptions and total out-migration exemptions for each county. This measure captures the overall volume of migration activity, regardless of direction. The contextual variables were then merged onto this county-level gross flow table to create the final analysis dataset.
 
 ```{r}
 gross_flow = full_join(
@@ -352,8 +351,6 @@ gross_flow = full_join(
   select(county_fips, county_state, total_out_exemptions, total_in_exemptions, gross_flow) |> 
   arrange(desc(gross_flow))
 ```
-
-Join the factors table on the gross migration table.
 
 ```{r}
 gross_flow_joined = gross_flow |>
@@ -409,9 +406,9 @@ gross_flow_joined = gross_flow |>
   )
 ```
 
-### EDA
+### Exploratory data analysis
 
-Distribution of gross flow:
+I conducted exploratory data analysis to understand the distribution of the outcome and predictors and to guide subsequent modeling decisions. A scatterplot of gross flow against population on the log scale showed that counties with larger populations tended to have much higher migration volumes, indicating that raw gross flow was strongly associated with county size. For this reason, I used gross flow rate per 1,000 population as the main outcome for exploratory plots, while retaining raw gross flow as the modeled count outcome with a population offset in the regression model.
 
 ```{r}
 ggplot(gross_flow_joined, aes(x = population, y = gross_flow)) +
@@ -420,10 +417,6 @@ ggplot(gross_flow_joined, aes(x = population, y = gross_flow)) +
   scale_y_log10() +
   theme_bw()
 ```
-Gross flow is highly correlated with population, so we use gross flow rate instead.
-
-Distribution of gross flow rate:
-
 ```{r}
 ggplot(gross_flow_joined, aes(x = gross_flow_rate)) +
   geom_density(fill = "grey") +
@@ -435,7 +428,7 @@ ggplot(gross_flow_joined, aes(x = gross_flow_rate)) +
   )
 ```
 
-Distribution of the continuous variables:
+I then examined the distributions of the continuous predictors and the distribution of RUCC. Several continuous variables, particularly median household income, housing rent, and population, were right-skewed. To reduce skewness and improve interpretability, these variables were log-transformed before model fitting. I also assessed the bivariate relationships between gross flow rate and each candidate predictor using scatterplots with smooth trend lines, and compared gross flow rate across RUCC categories using boxplots. 
 
 ```{r}
 eda_long = gross_flow_joined |>
@@ -463,7 +456,6 @@ ggplot(eda_long, aes(x = value)) +
   ) +
   theme_minimal()
 ```
-Distribution of the categorical variable:
 
 ```{r}
 ggplot(gross_flow_joined, aes(x = as.factor(rucc))) +
@@ -475,8 +467,6 @@ ggplot(gross_flow_joined, aes(x = as.factor(rucc))) +
     y = "Count"
   )
 ```
-
-According to the EDA results, some variables distributions are skewed and need to be taken logarithm.
 
 ```{r}
 analysis_df = 
@@ -512,7 +502,7 @@ ggplot(eda_long_2, aes(x = value)) +
   theme_minimal()
 ```
 
-Find out the relationship between gross flow and the predictors.
+Find out the relationship between gross flow rate and the predictors.
 
 ```{r}
 analysis_df |>
@@ -543,11 +533,11 @@ ggplot(analysis_df, aes(x = factor(rucc), y = gross_flow_rate)) +
         y = "Gross Flow Rate" )
 ```
 
-Based on the exploratory plots, I decided to retain log_income, log_population, log_rent, young_share, and RUCC for the model. These variables all showed at least some visible relationship with gross flow rate and are also substantively relevant to migration patterns. In particular, log_income, log_population, and young_share showed clearer positive trends, while log_rent and RUCC still appeared informative enough to keep for further modeling.
+Based on these exploratory plots, log-transformed income, log-transformed rent, log-transformed population, young population share, and RUCC were retained as candidate predictors. In contrast, sex ratio and unemployment rate were excluded from the main model because they showed little clear or consistent relationship with gross flow rate in the exploratory stage.
 
-I decided to remove sex_ratio and unemp_percent from the main model. The scatterplots suggested that sex_ratio had little clear association with gross flow rate, and unemp_percent also showed only a weak and inconsistent pattern. Since both variables appeared to contribute limited explanatory value at the EDA stage, they were excluded to keep the model more focused and interpretable.
+### Correlation assessment and variable selection
 
-### Correlation Analysis
+After the exploratory stage, I assessed correlation among the retained predictors using a Spearman correlation matrix. ChatGPT were consulted to help identify an appropriate way to assess association among predictors that included both continuous and categorical variables. Based on this guidance, Spearman correlation was used as a practical screening tool before model fitting to identify potentially redundant variables. The strongest correlation was observed between log population and RUCC (Spearman correlation = -0.74), suggesting substantial overlap in the variation captured by these two measures. Because RUCC was more directly aligned with the urban-rural structure of counties and population was already accounted for through an offset term in the final count model, log population was excluded from the final predictor set. The final model therefore retained log household income, RUCC, log rent, and young population share.
 
 ```{r}
 cor_mat = analysis_df |>
@@ -588,9 +578,9 @@ ggplot(cor_long, aes(x = Var1, y = Var2, fill = Freq)) +
   )
 ```
 
-Based on the correlation analysis, log_population was excluded from the final model because it showed the strongest correlation with another predictor, rucc (Spearman ρ = -0.74). This suggested potential redundancy, so I retained log_income, rucc, log_rent, and young_share for modeling.
+### Statistical modeling
 
-Fit model and do VIF analysis:
+The final model was fitted using a generalized additive model (GAM) with a negative binomial distribution and log link. After examining the observed data patterns, I discussed possible modeling strategies with ChatGPT, including how to handle a count outcome, population differences across counties, and the possibility of nonlinear relationships for some predictors. Based on these considerations, I determined that a GAM was the most appropriate choice for the analysis. Log household income and RUCC were included as parametric terms, while log rent and young population share were modeled using smooth functions. To account for differences in county size, log population was included as an offset term. Model estimation was carried out using restricted maximum likelihood (REML).
 
 ```{r}
 fit_gam_nb = mgcv::gam(
@@ -599,7 +589,7 @@ fit_gam_nb = mgcv::gam(
     s(young_share) +
     offset(log(population)),
   family = nb(),
-  data = count_df,
+  data = analysis_df,
   method = "REML"
 )
 
@@ -607,7 +597,27 @@ summary(fit_gam_nb)
 plot(fit_gam_nb, pages = 1)
 ```
 
+## Result
 
+The final negative binomial GAM was fitted on 3,071 counties and showed a reasonably good fit, with adjusted R squared = 0.702 and 41.0% deviance explained. Log household income was positively associated with gross migration flow and was highly significant (estimate = 0.676, p < 2e-16), indicating that counties with higher income tended to have greater overall migration activity after accounting for population size. RUCC was also strongly associated with migration intensity. Compared with the most urban reference category, counties in RUCC categories 2 through 9 had significantly lower expected gross migration flow, and the coefficients became more negative for more rural categories. This pattern suggests that migration activity was generally lower in more rural counties.
+
+The two smooth terms were also significant and helped reveal nonlinear relationships. For log rent, the estimated smooth effect was relatively flat across low to moderate rent levels, but it declined at higher rent levels. This suggests that migration flow did not change much across most rent values, but counties with very high rents tended to have lower gross migration flow. For young population share, the smooth effect increased sharply at lower values, continued to rise across most of the observed range, and then leveled off slightly at the highest values. This indicates that counties with a larger share of young residents generally had higher migration intensity, although the relationship was not strictly linear. Overall, the results suggest that gross migration flow was most strongly associated with household income, urban-rural status, housing rent, and local age structure.
+
+Other migration patterns, such as net migration or directional flows between urban and rural counties, may provide additional insight, but this analysis focused on gross migration flow as a county-level measure of overall migration intensity.
+
+## Data Sources
+
+### Data Sources
+
+- [U.S. Census Bureau: 2003 SAIPE State and County Estimates](https://www.census.gov/data/datasets/2003/demo/saipe/2003-state-and-county.html)
+- [U.S. Bureau of Labor Statistics: Labor force data by county, 2003 annual averages](https://www.bls.gov/lau/tables.htm)
+- [USDA Economic Research Service: 2003 Rural-Urban Continuum Codes](https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/documentation)
+- [HUD USER: FY2003 50th Percentile Rents, Data by County](https://www.huduser.gov/portal/datasets/50per.html)
+- [U.S. Census Bureau: Intercensal Estimates of the Resident Population by Five-Year Age Groups and Sex for Counties, 2000-2010](https://www.census.gov/data/datasets/time-series/demo/popest/intercensal-2000-2010-counties.html)
+
+# 5
+
+NLP Analysis: Extract and analyze common themes or factors driving migration by scraping relevant news articles from the top migration counties.
 
 
 
