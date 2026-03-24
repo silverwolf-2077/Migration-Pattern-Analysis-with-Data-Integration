@@ -178,7 +178,7 @@ top_out_migration |>
 ```
 ## Results
 
-Table 2 shows counties with the highest in-migration, and Table 3 shows counties with the highest out-migration. Los Angeles County, CA showed the highest in-migration and also also highest out-migration, indicating exceptionally high migration turnover.
+Table 2 shows counties with the highest in-migration, and Table 3 shows counties with the highest out-migration. Los Angeles County, CA showed the highest in-migration and also highest out-migration, indicating exceptionally high migration turnover.
 
 
 # 3
@@ -528,7 +528,7 @@ Based on these exploratory plots, log-transformed income, log-transformed rent, 
 
 ### Correlation assessment and variable selection
 
-After the exploratory stage, I assessed correlation among the retained predictors using a Spearman correlation matrix. ChatGPT were consulted to help identify an appropriate way to assess association among predictors that included both continuous and categorical variables. Based on this guidance, Spearman correlation was used as a practical screening tool before model fitting to identify potentially redundant variables. The strongest correlation was observed between log population and RUCC (Spearman correlation = -0.74), suggesting substantial overlap in the variation captured by these two measures. Because RUCC was more directly aligned with the urban-rural structure of counties and population was already accounted for through an offset term in the final count model, log population was excluded from the final predictor set. The final model therefore retained log household income, RUCC, log rent, and young population share.
+After the exploratory stage, I assessed correlation among the retained predictors using a Spearman correlation matrix. ChatGPT was consulted to help identify an appropriate way to assess association among predictors that included both continuous and categorical variables. Based on this guidance, Spearman correlation was used as a practical screening tool before model fitting to identify potentially redundant variables. The strongest correlation was observed between log population and RUCC (Spearman correlation = -0.74), suggesting substantial overlap in the variation captured by these two measures. Because RUCC was more directly aligned with the urban-rural structure of counties and population was already accounted for through an offset term in the final count model, log population was excluded from the final predictor set. The final model therefore retained log household income, RUCC, log rent, and young population share.
 
 ```{r}
 cor_mat = analysis_df |>
@@ -594,6 +594,8 @@ The final negative binomial GAM was fitted on 3,071 counties and showed a reason
 
 The two smooth terms were also significant and helped reveal nonlinear relationships. For log rent, the estimated smooth effect was relatively flat across low to moderate rent levels, but it declined at higher rent levels. This suggests that migration flow did not change much across most rent values, but counties with very high rents tended to have lower gross migration flow. For young population share, the smooth effect increased sharply at lower values, continued to rise across most of the observed range, and then leveled off slightly at the highest values. This indicates that counties with a larger share of young residents generally had higher migration intensity, although the relationship was not strictly linear. Overall, the results suggest that gross migration flow was most strongly associated with household income, urban-rural status, housing rent, and local age structure.
 
+The contextual analysis is cross-sectional and ecological, so associations should not be interpreted as causal.
+
 Other migration patterns, such as net migration or directional flows between urban and rural counties, may provide additional insight, but this analysis focused on gross migration flow as a county-level measure of overall migration intensity.
 
 ## Data Sources
@@ -610,7 +612,7 @@ __NLP Analysis:__ Extract and analyze common themes or factors driving migration
 
 ## Methods
 
-Before assembling the article corpus, I first discussed with ChatGPT which counties would be the most appropriate focus for the NLP analysis. Based on the migration results, we agreed that concentrating on Los Angeles County and the counties appearing in its top two interaction pairs would provide the most coherent set of articles, because these counties seemed to reflect a clearer regional migration pattern than a broader mix of unrelated counties. I then used ChatGPT to suggest search terms for finding general local newspaper coverage on population change and migration trends in these counties, rather than directly searching for predefined migration drivers. Using this approach, I collected broader news articles on demographic change and migration patterns, and then used the NLP analysis to identify recurring themes and possible factors discussed in the articles. ChatGPT also helped identify several potentially relevant articles, which I manually reviewed and curated before compiling the final dataset for text analysis.
+Before assembling the article corpus, I first discussed with ChatGPT which counties would be the most appropriate focus for the NLP analysis. Based on the migration results, we agreed that concentrating on Los Angeles County and the counties appearing in its top two interaction pairs would provide the most coherent set of articles, because these counties seemed to reflect a clearer regional migration pattern than a broader mix of unrelated counties. I then used ChatGPT to suggest search terms for finding general local newspaper coverage on population change and migration trends in these counties, rather than directly searching for predefined migration drivers. Using this approach, I collected broader news articles on demographic change and migration patterns, and then manually collected article text from public news websites and compiled them into articles.xlsx for downstream NLP analysis. ChatGPT also helped identify several potentially relevant articles, which I manually reviewed and curated before compiling the final dataset for text analysis.
 
 Import and clean the raw text.
 
@@ -663,14 +665,9 @@ words_df = sentences_df |>
 
 top_words = words_df |>
   count(lemma, sort = TRUE)
-
-top_words |> 
-  slice_head(n = 20) |> 
-  knitr::kable() |> 
-  kableExtra::kable_styling(full_width = FALSE)
 ```
 
-I summarized the top 20 most frequent terms in a table and visualized them using a horizontal bar chart. I also created a word cloud as a supplementary visualization to provide an intuitive overview of the most prominent terms in the corpus.
+I summarized the top 20 most frequent terms and visualized them using a horizontal bar chart. I also created a word cloud as a supplementary visualization to provide an intuitive overview of the most prominent terms in the corpus.
 
 ```{r}
 top_words |>
@@ -703,7 +700,7 @@ wordcloud(
 
 ## Results
 
-The NLP analysis of the selected news articles identified four recurring themes in migration-related coverage: housing and affordability, economic opportunity, family and education, and demographic change. These themes are broadly consistent with the contextual variables analyzed in Task 4, especially housing, economic conditions, and demographic composition.
+The NLP analysis of the selected news articles identified four recurring themes in migration-related coverage: housing and affordability, economic opportunity, family and education, and demographic change. These themes are broadly consistent with the contextual variables analyzed in Task 4, especially housing, economic conditions, and demographic composition. However, the NLP corpus is relatively small and reflects selected media coverage, so extracted themes may be influenced by article selection and editorial framing.
 
 ### - Housing
 
