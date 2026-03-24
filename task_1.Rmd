@@ -16,6 +16,8 @@ library(stringr)
 library(knitr)
 library(SnowballC)
 library(textstem)
+library(wordcloud)
+library(RColorBrewer)
 ```
 
 Import, clean and merge the datasets.
@@ -60,7 +62,7 @@ migration_raw = map_dfr(files, read_migration_file) |>
 
 Identify the county pairs with the most interactions (by number of exemptions).
 
-## Method
+## Methods
 
 Before analyzing migration patterns, I removed rows that did not represent meaningful county-to-county migration. Specifically, I excluded summary rows where orig_state_fips > 56, since these rows correspond to aggregated categories rather than actual U.S. counties. I also removed rows where the origin and destination counties were the same, because this project focuses on migration between counties rather than within-county records.
 
@@ -130,16 +132,16 @@ top_pairs_named |>
   knitr::kable(caption = "Table 1. Top 5 county pairs by total exemptions") |> 
   kableExtra::kable_styling(full_width = FALSE)
 ```
-## Result
+## Results
 
-The the county pairs with the most interactions (by number of exemptions) are shown in Table 1.
+As shown in Table 1, Los Angeles County, California had the strongest interaction with other counties, appearing in the top two county pairs with the highest total exemptions. Its largest interactions were with San Bernardino County and Orange County, both of which are also located in California. This suggests that the most prominent migration interactions in the dataset were not primarily long-distance interstate flows, but rather within-state and relatively local movements, consistent with an inland migration pattern centered around Los Angeles County.
 
 
 # 2
 
 Determine which counties show the highest in-migration and out-migration.
 
-## Method
+## Methods
 
 To identify the counties with the highest in-migration and out-migration, I aggregated migration flows at the county level using the number of exemptions as the measure of migration volume. Specifically, I summed exemptions across all records for each destination county (dest_fips) to measure total in-migration, and across all records for each origin county (orig_fips) to measure total out-migration. After ranking counties in descending order of total exemptions, I joined the results with the county lookup table to attach readable county names and state abbreviations.
 
@@ -174,16 +176,16 @@ top_out_migration |>
   knitr::kable(caption = "Table 3. Counties with the highest out-migration") |> 
   kableExtra::kable_styling(full_width = FALSE)
 ```
-## Result
+## Results
 
-Table 2 shows counties with the highest in-migration, and Table 3 shows counties with the highest out-migration.
+Table 2 shows counties with the highest in-migration, and Table 3 shows counties with the highest out-migration. Los Angeles County, CA showed the highest in-migration and also also highest out-migration, indicating exceptionally high migration turnover.
 
 
 # 3
 
 Calculate net migration for the New York metropolitan area.
 
-## Method
+## Methods
 
 I defined the New York metropolitan area using the current metropolitan county classification. I used ChatGPT to help identify the counties in the metropolitan area and their corresponding FIPS codes. Based on these county FIPS codes, I identified migration flows crossing the metropolitan boundary. Inflows were defined as flows from outside the metropolitan area into it, and outflows were defined as flows from the metropolitan area to outside it. Net migration was calculated as inflow minus outflow.
 
@@ -243,7 +245,7 @@ ny_metro_net_migration |>
   kableExtra::kable_styling()
 ```
 
-## Result
+## Results
 
 As shown in Table 4, the New York metropolitan area had 128,931 inflows and 265,940 outflows, resulting in a net migration of -137,009. This indicates an overall net out-migration.
 
@@ -252,7 +254,7 @@ As shown in Table 4, the New York metropolitan area had 128,931 inflows and 265,
 
 __Data Enrichment Challenge:__ Using publicly available GenAI tools, augment this migration data with at least three additional contextual data points (economic indicators, demographic information, etc.) that help explain the migration patterns.
 
-## Method
+## Methods
 
 ### Data enrichment and contextual variables
 
@@ -586,7 +588,7 @@ summary(fit_gam_nb)
 plot(fit_gam_nb, pages = 1)
 ```
 
-## Result
+## Results
 
 The final negative binomial GAM was fitted on 3,071 counties and showed a reasonably good fit, with adjusted R squared = 0.702 and 41.0% deviance explained. Log household income was positively associated with gross migration flow and was highly significant (estimate = 0.676, p < 2e-16), indicating that counties with higher income tended to have greater overall migration activity after accounting for population size. RUCC was also strongly associated with migration intensity. Compared with the most urban reference category, counties in RUCC categories 2 through 9 had significantly lower expected gross migration flow, and the coefficients became more negative for more rural categories. This pattern suggests that migration activity was generally lower in more rural counties.
 
@@ -604,7 +606,11 @@ Other migration patterns, such as net migration or directional flows between urb
 
 # 5
 
-NLP Analysis: Extract and analyze common themes or factors driving migration by scraping relevant news articles from the top migration counties.
+__NLP Analysis:__ Extract and analyze common themes or factors driving migration by scraping relevant news articles from the top migration counties.
+
+## Methods
+
+Before assembling the article corpus, I first discussed with ChatGPT which counties would be the most appropriate focus for the NLP analysis. Based on the migration results, we agreed that concentrating on Los Angeles County and the counties appearing in its top two interaction pairs would provide the most coherent set of articles, because these counties seemed to reflect a clearer regional migration pattern than a broader mix of unrelated counties. I then used ChatGPT to suggest search terms for finding general local newspaper coverage on population change and migration trends in these counties, rather than directly searching for predefined migration drivers. Using this approach, I collected broader news articles on demographic change and migration patterns, and then used the NLP analysis to identify recurring themes and possible factors discussed in the articles. ChatGPT also helped identify several potentially relevant articles, which I manually reviewed and curated before compiling the final dataset for text analysis.
 
 Import and clean the raw text.
 
@@ -618,7 +624,7 @@ sentences_df = nlp_df |>
   unnest_tokens(sentence, raw_text, token = "sentences")
 ```
 
-Stop words
+The text data were prepared for natural language processing by creating a customized stop-word list. In addition to standard English stop words, I removed common reporting words, generic geographic references, county and state names, and other high-frequency but low-information terms that were unlikely to reflect substantive migration themes.
 
 ```{r}
 custom_stop = stop_words |>
@@ -645,7 +651,7 @@ custom_stop = stop_words |>
   distinct()
 ```
 
-Overall most frequent words
+I tokenized the article text into individual words at the sentence level and retained only alphabetic tokens. After removing the customized stop words, I applied lemmatization to reduce words to their base forms so that related word variants could be analyzed together. I then calculated the overall frequency of lemmatized terms across all selected articles to identify the most common themes appearing in the migration-related coverage.
 
 ```{r}
 words_df = sentences_df |>
@@ -664,7 +670,7 @@ top_words |>
   kableExtra::kable_styling(full_width = FALSE)
 ```
 
-Visualization of top words
+I summarized the top 20 most frequent terms in a table and visualized them using a horizontal bar chart. I also created a word cloud as a supplementary visualization to provide an intuitive overview of the most prominent terms in the corpus.
 
 ```{r}
 top_words |>
@@ -680,11 +686,53 @@ top_words |>
 ```
 
 
+```{r}
+set.seed(123)
 
+wordcloud(
+  words = top_words$lemma,
+  freq = top_words$n,
+  min.freq = 2,
+  max.words = 20,
+  random.order = FALSE,
+  rot.per = 0.2,
+  scale = c(4, 0.8),
+  colors = brewer.pal(8, "Dark2")
+)
+```
 
+## Results
 
+The NLP analysis of the selected news articles identified four recurring themes in migration-related coverage: housing and affordability, economic opportunity, family and education, and demographic change. These themes are broadly consistent with the contextual variables analyzed in Task 4, especially housing, economic conditions, and demographic composition.
 
+### - Housing
 
+Terms such as "house", "home", and "price" appeared frequently, indicating that housing market conditions and living costs were recurring topics in the migration-related coverage.
+
+### - Economy
+
+The frequent appearance of "job" and "economic" suggests that employment opportunities and broader economic conditions were also commonly discussed in relation to migration.
+
+### - Family / education
+
+Words such as "child", "school", "family", and "college" indicate that migration was often discussed alongside family needs and access to education.
+
+### - Demographic change
+
+Frequent demographic terms, including "black", "white", "immigrant", "asian", "minority", and "neighborhood", show that many articles also focused on racial, ethnic, and neighborhood composition changes.
+
+## Sources
+
+1. Los Angeles Times. (2003, October 3). *[Escape From L.A.: It’s a Rainbow](https://www.latimes.com/archives/la-xpm-2003-oct-03-me-immigrate3-story.html)*.
+2. Los Angeles Business Journal. (2005, July 26). *[Population Growth in L.A. County Slows](https://labusinessjournal.com/news/population-growth-in-la-county-slows/)*.
+3. Brookings. (2003, November 1). *[Los Angeles in Focus: A Profile from Census 2000](https://www.brookings.edu/articles/los-angeles-in-focus-a-profile-from-census-2000/)*.
+4. Los Angeles Times. (2004, September 11). *[Clinging to Dream’s Frayed Edges](https://www.latimes.com/archives/la-xpm-2004-sep-11-me-exodus11-story.html)*.
+5. Los Angeles Times. (2004, May 24). *[In a Reverse Migration, Blacks Head to New South](https://www.latimes.com/archives/la-xpm-2004-may-24-me-migration24-story.html)*.
+6. Los Angeles Times. (2004, February 14). *[Southland’s Population Still on the Rise](https://www.latimes.com/archives/la-xpm-2004-feb-14-me-population14-story.html)*.
+7. Los Angeles Times. (2004, July 19). *[Will White Influx Put Down Roots in L.A. Core?](https://www.latimes.com/archives/la-xpm-2004-jul-19-oe-rodriguez19-story.html)*.
+8. Los Angeles Times. (2004, June 24). *[Inland Empire Makes It Big on U.S. Growth Chart](https://www.latimes.com/archives/la-xpm-2004-jun-24-me-cities24-story.html)*.
+9. Los Angeles Times. (2005, April 15). *[Inland Empire Is True to Its Name](https://www.latimes.com/archives/la-xpm-2005-apr-15-me-census15-story.html)*.
+10. Los Angeles Times. (2004, September 30). *[O.C. Whites a Majority No Longer](https://www.latimes.com/archives/la-xpm-2004-sep-30-me-census30-story.html)*.  
 
 
 
