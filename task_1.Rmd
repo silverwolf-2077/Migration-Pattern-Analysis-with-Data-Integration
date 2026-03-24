@@ -11,22 +11,11 @@ library(readxl)
 library(patchwork)
 library(splines)
 library(mgcv)
-
-knitr::opts_chunk$set(
-  fig.width = 6,
-  fig.asp = .6,
-  out.width = "90%"
-)
-
-theme_set(theme_minimal() + theme(legend.position = "bottom"))
-
-options(
-  ggplot2.continuous.colour = "viridis",
-  ggplot2.continuous.fill = "viridis"
-)
-
-scale_colour_discrete = scale_colour_viridis_d
-scale_fill_discrete = scale_fill_viridis_d
+library(tidytext)
+library(stringr)
+library(knitr)
+library(SnowballC)
+library(textstem)
 ```
 
 Import, clean and merge the datasets.
@@ -607,8 +596,6 @@ Other migration patterns, such as net migration or directional flows between urb
 
 ## Data Sources
 
-### Data Sources
-
 - [U.S. Census Bureau: 2003 SAIPE State and County Estimates](https://www.census.gov/data/datasets/2003/demo/saipe/2003-state-and-county.html)
 - [U.S. Bureau of Labor Statistics: Labor force data by county, 2003 annual averages](https://www.bls.gov/lau/tables.htm)
 - [USDA Economic Research Service: 2003 Rural-Urban Continuum Codes](https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/documentation)
@@ -619,10 +606,78 @@ Other migration patterns, such as net migration or directional flows between urb
 
 NLP Analysis: Extract and analyze common themes or factors driving migration by scraping relevant news articles from the top migration counties.
 
+Import and clean the raw text.
 
+```{r}
+nlp_df = read_xlsx("articles.xlsx") |> 
+  janitor::clean_names()
 
+# Split each article into sentences
+sentences_df = nlp_df |>
+  select(article_id, county, source, title, date, url, raw_text) |>
+  unnest_tokens(sentence, raw_text, token = "sentences")
+```
 
+Stop words
 
+```{r}
+custom_stop = stop_words |>
+  select(word) |>
+  bind_rows(
+    tibble(
+      word = c(
+        "said", "would", "could", "also", "one", "two", "new", "year", "years",
+        "people", "residents", "officials", "according", "including", 
+        "los", "angeles", "la",
+        "san", "bernardino",
+        "orange", "riverside",
+        "county", "counties", "california",
+        "population", "city", "kelly", "growth", "smith",
+        "cities", "census", "region", "grew", "growing", "migration",
+        "rose", "million", "time", "move", "rate", "day", 
+        "report", "top", "ago", "decade",
+        "inland", "south", "southern", "central",
+        "moved", "middle", "brinson", "empire", "found", "july",
+        "left", "migrants", "percent", "median", "trend"
+      )
+    )
+  ) |>
+  distinct()
+```
+
+Overall most frequent words
+
+```{r}
+words_df = sentences_df |>
+  select(article_id, county, title, sentence) |>
+  unnest_tokens(word, sentence) |>
+  filter(str_detect(word, "^[a-z]+$")) |>
+  anti_join(custom_stop, by = "word") |> 
+  mutate(lemma = lemmatize_words(word))
+
+top_words = words_df |>
+  count(lemma, sort = TRUE)
+
+top_words |> 
+  slice_head(n = 20) |> 
+  knitr::kable() |> 
+  kableExtra::kable_styling(full_width = FALSE)
+```
+
+Visualization of top words
+
+```{r}
+top_words |>
+  slice_head(n = 20) |> 
+  ggplot(aes(x = n, y = reorder(lemma, n))) +
+  geom_col() +
+  labs(
+    title = "Most frequent terms in migration-related news articles",
+    x = "Count",
+    y = NULL
+  ) +
+  theme_minimal()
+```
 
 
 
