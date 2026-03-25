@@ -5,8 +5,9 @@ account: arwending
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 16980854
-bundleId: 11759285
+bundleId: 11759380
 url: https://arwending.shinyapps.io/MigrationDashboard/
 version: 1
 asMultiple: TRUE
 asStatic: FALSE
+ignoredFiles: County FIPS codes.csv|contextual data/est03all.xls|contextual data/FY2003_50Rents_County.xls|contextual data/laucnty03.xlsx|contextual data/ruralurbancodes2003.xls|contextual data/population_est.csv|articles.xlsx
