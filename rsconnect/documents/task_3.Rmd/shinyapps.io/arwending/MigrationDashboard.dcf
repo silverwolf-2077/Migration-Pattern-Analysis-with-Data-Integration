@@ -1,0 +1,12 @@
+name: MigrationDashboard
+title: MigrationDashboard
+username: arwending
+account: arwending
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16980854
+bundleId: 11759285
+url: https://arwending.shinyapps.io/MigrationDashboard/
+version: 1
+asMultiple: TRUE
+asStatic: FALSE

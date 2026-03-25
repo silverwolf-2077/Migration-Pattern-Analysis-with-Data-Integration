@@ -309,7 +309,7 @@ call_openai_summary = function(prompt_text) {
 }
 ```
 
-## Column {.sidebar data-width=350}
+## Column {.sidebar data-width=320}
 
 ```{r}
 states = analysis_df |> distinct(state) |> pull()
@@ -549,7 +549,7 @@ htmltools::div(
 )
 ```
 
-## Column {data-width="380"}
+## Column {data-width="410"}
 
 ### Top Interaction Counties
 
