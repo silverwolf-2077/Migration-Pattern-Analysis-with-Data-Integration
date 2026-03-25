@@ -1,0 +1,1039 @@
+---
+title: "AI-Enhanced U.S. County Migration Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(plotly)
+library(viridis)
+library(sf)
+library(tigris)
+library(geojsonsf)
+library(jsonlite)
+library(scales)
+library(dplyr)
+library(stringr)
+library(httr)
+```
+
+```{r}
+# Import preprocessed data.
+analysis_df = readRDS("dashboard_data/analysis_df.rds")
+top_pairs_named = read_csv("dashboard_data/top_pairs_named.csv", show_col_types = FALSE)
+words_df = read_csv("dashboard_data/words_df.csv", show_col_types = FALSE)
+```
+
+```{r}
+# Split any 5-digit FIPS column into 2-digit state + 3-digit county.
+split_fips_cols = function(df, fips_cols) {
+  df |>
+    mutate(
+      across(
+        any_of(fips_cols),
+        ~ stringr::str_pad(as.character(.x), width = 5, pad = "0")
+      )
+    ) |>
+    mutate(
+      across(
+        any_of(fips_cols),
+        ~ stringr::str_sub(.x, 1, 2),
+        .names = "{.col}_state"
+      ),
+      across(
+        any_of(fips_cols),
+        ~ stringr::str_sub(.x, 3, 5),
+        .names = "{.col}_county"
+      )
+    )
+}
+
+analysis_df = analysis_df |>
+  split_fips_cols(c("dest_fips", "orig_fips", "county_fips", "pair_1_fips", "pair_2_fips")) |>
+  separate(
+    county_state,
+    into = c("county", "state"),
+    sep = ",\\s*",
+    remove = FALSE,
+    fill = "right"
+  ) |> 
+  mutate(
+    net_out_flow = total_out_exemptions - total_in_exemptions
+  )
+
+top_pairs_named = top_pairs_named |>
+  split_fips_cols(c("pair_1_fips", "pair_2_fips")) |>
+  separate(
+    pair_1_county,
+    into = c("pair_1_county_name", "pair_1_state"),
+    sep = ",\\s*",
+    remove = FALSE
+  ) |>
+  separate(
+    pair_2_county,
+    into = c("pair_2_county_name", "pair_2_state"),
+    sep = ",\\s*",
+    remove = FALSE
+  )
+
+analysis_df = analysis_df |>
+  mutate(
+    county_fips = stringr::str_pad(as.character(county_fips), 5, pad = "0")
+  ) 
+
+top_pairs_named = top_pairs_named |>
+  mutate(
+    pair_1_fips = stringr::str_pad(as.character(pair_1_fips), 5, pad = "0"),
+    pair_2_fips = stringr::str_pad(as.character(pair_2_fips), 5, pad = "0")
+  )
+
+# One row per county for map / lookup / comparison.
+county_df = analysis_df |>
+  mutate(
+    county_fips = stringr::str_pad(as.character(county_fips), 5, pad = "0"),
+    net_out_flow = total_out_exemptions - total_in_exemptions
+  ) |>
+  distinct(county_fips, .keep_all = TRUE)
+```
+
+```{r}
+# ---------- Helper functions ----------
+
+`%||%` = function(x, y) {
+  if (is.null(x) || length(x) == 0) y else x
+}
+
+safe_first = function(x, default = NA) {
+  if (length(x) == 0 || all(is.na(x))) default else x[[1]]
+}
+
+dataframe_to_records = function(df) {
+  if (is.null(df) || nrow(df) == 0) return(list())
+  jsonlite::fromJSON(
+    jsonlite::toJSON(df, dataframe = "rows", auto_unbox = TRUE, na = "null"),
+    simplifyVector = FALSE
+  )
+}
+
+clean_feature_name = function(x) {
+  stringr::str_replace_all(x, "<br>", " ")
+}
+
+format_feature_raw = function(feature, value) {
+  case_when(
+    feature == "Median<br>income" ~ paste0("$", scales::comma(round(value, 0))),
+    feature == "Unemployment<br>rate" ~ paste0(round(value, 1), "%"),
+    feature == "Population" ~ scales::comma(round(value, 0)),
+    feature == "Median<br>rent" ~ paste0("$", scales::comma(round(value, 0))),
+    feature == "Young<br>share" ~ paste0(round(value * 100, 1), "%"),
+    TRUE ~ as.character(round(value, 2))
+  )
+}
+
+get_map_value_df = function(df, map_type) {
+  df |>
+    mutate(
+      map_value = dplyr::case_when(
+        map_type == "in" ~ total_in_exemptions,
+        map_type == "out" ~ total_out_exemptions,
+        map_type == "net" ~ net_out_flow,
+        map_type == "gross" ~ gross_flow,
+        map_type == "population" ~ population
+      ),
+      map_label = dplyr::case_when(
+        map_type == "in" ~ "In migration",
+        map_type == "out" ~ "Out migration",
+        map_type == "net" ~ "Net out migration",
+        map_type == "gross" ~ "Gross migration",
+        map_type == "population" ~ "Population"
+      )
+    )
+}
+
+get_clicked_id = function(click_data) {
+  if (is.null(click_data)) return(NULL)
+  
+  if (!is.null(click_data$key) && length(click_data$key) > 0) {
+    return(stringr::str_pad(as.character(click_data$key[[1]]), 5, pad = "0"))
+  }
+  
+  if (!is.null(click_data$location) && length(click_data$location) > 0) {
+    return(stringr::str_pad(as.character(click_data$location[[1]]), 5, pad = "0"))
+  }
+  
+  if (!is.null(click_data$customdata)) {
+    cd = click_data$customdata
+    
+    if (is.list(cd)) {
+      cd = unlist(cd, recursive = TRUE, use.names = FALSE)
+    }
+    
+    if (length(cd) > 0) {
+      return(stringr::str_pad(as.character(cd[[1]]), 5, pad = "0"))
+    }
+  }
+  
+  return(NULL)
+}
+
+make_empty_plot = function(message, title = NULL, source = NULL) {
+  p = plot_ly(
+    x = numeric(0),
+    y = numeric(0),
+    type = "scatter",
+    mode = "markers",
+    source = source
+  ) |>
+    layout(
+      title = title,
+      annotations = list(
+        list(
+          text = message,
+          x = 0.5,
+          y = 0.5,
+          xref = "paper",
+          yref = "paper",
+          showarrow = FALSE,
+          font = list(size = 14)
+        )
+      ),
+      xaxis = list(visible = FALSE),
+      yaxis = list(visible = FALSE),
+      margin = list(l = 40, r = 20, t = 40, b = 40)
+    )
+  
+  if (!is.null(source)) {
+    p = p |> event_register("plotly_click")
+  }
+  
+  p
+}
+
+extract_response_text = function(resp_json) {
+  if (!is.null(resp_json$output_text) &&
+      length(resp_json$output_text) > 0 &&
+      nzchar(resp_json$output_text)) {
+    return(resp_json$output_text)
+  }
+  
+  pieces = c()
+  
+  for (item in resp_json$output %||% list()) {
+    if (!is.null(item$content) && is.list(item$content)) {
+      for (part in item$content) {
+        if (!is.null(part$type) &&
+            identical(part$type, "output_text") &&
+            !is.null(part$text)) {
+          pieces = c(pieces, part$text)
+        }
+      }
+    }
+  }
+  
+  paste(pieces, collapse = "\n")
+}
+
+call_openai_summary = function(prompt_text) {
+  api_key = Sys.getenv("OPENAI_API_KEY")
+  model_name = Sys.getenv("OPENAI_MODEL", unset = "gpt-5.4-mini")
+  
+  if (api_key == "") {
+    stop("Missing OPENAI_API_KEY. Add it to your .Renviron and restart R.")
+  }
+  
+  developer_prompt = paste(
+    "You are a migration dashboard analyst.",
+    "Use only the structured dashboard data provided.",
+    "Do not invent any facts or causes not supported by the data.",
+    "If a section is missing, skip it rather than guessing.",
+    "Return exactly 4 short bullets in plain text:",
+    "1) Map pattern",
+    "2) Interaction pattern",
+    "3) Feature comparison or plausible interpretation",
+    "4) Caution or limitation",
+    sep = " "
+  )
+  
+  body_list = list(
+    model = model_name,
+    input = list(
+      list(
+        role = "developer",
+        content = developer_prompt
+      ),
+      list(
+        role = "user",
+        content = prompt_text
+      )
+    ),
+    text = list(
+      format = list(type = "text")
+    ),
+    max_output_tokens = 350,
+    store = FALSE
+  )
+  
+  res = httr::POST(
+    url = "https://api.openai.com/v1/responses",
+    httr::add_headers(
+      Authorization = paste("Bearer", api_key),
+      `Content-Type` = "application/json"
+    ),
+    body = jsonlite::toJSON(body_list, auto_unbox = TRUE, null = "null"),
+    encode = "raw",
+    httr::timeout(45)
+  )
+  
+  if (httr::http_error(res)) {
+    err_text = httr::content(res, as = "text", encoding = "UTF-8")
+    stop(paste("OpenAI API request failed:", err_text))
+  }
+  
+  parsed = jsonlite::fromJSON(
+    httr::content(res, as = "text", encoding = "UTF-8"),
+    simplifyVector = FALSE
+  )
+  
+  txt = extract_response_text(parsed)
+  
+  if (is.null(txt) || !nzchar(txt)) {
+    stop("The model response was empty.")
+  }
+  
+  txt
+}
+```
+
+## Column {.sidebar data-width=350}
+
+```{r}
+states = analysis_df |> distinct(state) |> pull()
+
+selectInput(
+  "state_choice", 
+  label = h4("Select state"),
+  choices = c("All States" = "all", stats::setNames(states, states)),
+  selected = "All States"
+)
+```
+
+```{r}
+selectInput(
+  "map_type",
+  label = h4("Select migration measure"),
+  choices = c(
+    "Population" = "population",
+    "In migration" = "in",
+    "Out migration" = "out",
+    "Net out migration" = "net",
+    "Gross migration" = "gross"
+  ),
+  selected = "net"
+)
+```
+
+```{r}
+actionButton(
+  "generate_ai_summary",
+  "Generate AI Summary"
+)
+
+tags$hr()
+
+h4("AI Summary")
+
+uiOutput("ai_summary_box")
+```
+
+## Column {data-width="520"}
+
+### Migration Overview Map
+
+```{r}
+selected_county_fips = reactiveVal(NULL)
+selected_county_name = reactiveVal(NULL)
+selected_partner_fips = reactiveVal(NULL)
+selected_partner_name = reactiveVal(NULL)
+ai_summary_text = reactiveVal("Click the button to generate AI insights from the current dashboard state.")
+
+observeEvent(selected_county_fips(), {
+  selected_partner_fips(NULL)
+  selected_partner_name(NULL)
+})
+
+observeEvent(
+  event_data("plotly_click", source = "map_click", priority = "event"),
+  ignoreInit = TRUE,
+  {
+    click_data = event_data("plotly_click", source = "map_click", priority = "event")
+    clicked_fips = get_clicked_id(click_data)
+    
+    req(clicked_fips)
+    
+    selected_county_fips(clicked_fips)
+    
+    county_label = county_df |>
+      filter(county_fips == clicked_fips) |>
+      pull(county_state)
+    
+    selected_county_name(county_label[1])
+  }
+)
+
+output$measure_range_ui = renderUI({
+  df_range = get_map_value_df(county_df, input$map_type)
+  
+  if (input$state_choice != "all") {
+    df_range = df_range |> filter(state == input$state_choice)
+  }
+  
+  req(nrow(df_range) > 0)
+  
+  range_min = floor(min(df_range$map_value, na.rm = TRUE))
+  range_max = ceiling(max(df_range$map_value, na.rm = TRUE))
+  
+  sliderInput(
+    "measure_range",
+    label = "Select measure range",
+    min = range_min,
+    max = range_max,
+    value = c(range_min, range_max),
+    sep = ","
+  )
+})
+
+filtered_map_df = reactive({
+  req(input$measure_range)
+  
+  df = get_map_value_df(county_df, input$map_type)
+  
+  if (input$state_choice != "all") {
+    df = df |> filter(state == input$state_choice)
+  }
+  
+  df |>
+    filter(
+      map_value >= input$measure_range[1],
+      map_value <= input$measure_range[2]
+    ) |>
+    distinct(county_fips, .keep_all = TRUE)
+})
+
+output$map = renderPlotly({
+  df = filtered_map_df()
+  req(nrow(df) > 0)
+  
+  counties_geojson = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
+  
+  plot_title = if (input$state_choice == "all") {
+    paste0(unique(df$map_label), " by County (United States)")
+  } else {
+    paste0(unique(df$map_label), " by County (", input$state_choice, ")")
+  }
+  
+  line_width = if (input$state_choice == "all") 0.1 else 0.5
+  
+  if (input$map_type == "net") {
+    max_abs = max(abs(df$map_value), na.rm = TRUE)
+    
+    p = plot_ly(
+      data = df,
+      source = "map_click",
+      geojson = counties_geojson,
+      featureidkey = "id",
+      locations = ~county_fips,
+      z = ~map_value,
+      type = "choropleth",
+      colorscale = "RdBu",
+      zmin = -max_abs,
+      zmax = max_abs,
+      customdata = ~county_fips,
+      key = ~county_fips,
+      marker = list(line = list(color = "white", width = line_width)),
+      text = ~paste0(
+        "State: ", state,
+        "<br>County: ", county,
+        "<br>", map_label, ": ", scales::comma(map_value)
+      ),
+      hovertemplate = "%{text}<extra></extra>",
+      colorbar = list(title = "Net out migration")
+    )
+    
+  } else {
+    
+    p = plot_ly(
+      data = df,
+      source = "map_click",
+      geojson = counties_geojson,
+      featureidkey = "id",
+      locations = ~county_fips,
+      z = ~map_value,
+      type = "choropleth",
+      colorscale = "Blues",
+      reversescale = TRUE,
+      customdata = ~county_fips,
+      key = ~county_fips,
+      marker = list(line = list(color = "white", width = line_width)),
+      text = ~paste0(
+        "State: ", state,
+        "<br>County: ", county,
+        "<br>", map_label, ": ", scales::comma(map_value)
+      ),
+      hovertemplate = "%{text}<extra></extra>",
+      colorbar = list(title = unique(df$map_label))
+    )
+  }
+  
+  if (input$state_choice == "all") {
+    p = p |>
+      layout(
+        title = plot_title,
+        clickmode = "event+select",
+        margin = list(l = 0, r = 0, t = 45, b = 0),
+        paper_bgcolor = "rgba(0,0,0,0)",
+        plot_bgcolor = "rgba(0,0,0,0)",
+        geo = list(
+          scope = "usa",
+          showland = FALSE,
+          showlakes = FALSE,
+          showcountries = FALSE,
+          showcoastlines = FALSE,
+          showsubunits = FALSE,
+          bgcolor = "rgba(0,0,0,0)"
+        )
+      )
+  } else {
+    p = p |>
+      layout(
+        title = plot_title,
+        clickmode = "event+select",
+        margin = list(l = 0, r = 0, t = 45, b = 0),
+        paper_bgcolor = "rgba(0,0,0,0)",
+        plot_bgcolor = "rgba(0,0,0,0)",
+        geo = list(
+          scope = "usa",
+          fitbounds = "locations",
+          showland = FALSE,
+          showlakes = FALSE,
+          showcountries = FALSE,
+          showcoastlines = FALSE,
+          showsubunits = FALSE,
+          bgcolor = "rgba(0,0,0,0)"
+        )
+      )
+  }
+  
+  p |> event_register("plotly_click")
+})
+
+htmltools::div(
+  style = "display: flex; flex-direction: column; height: 100%;",
+  
+  htmltools::div(
+    style = "flex: 1 1 auto; min-height: 0;",
+    plotlyOutput("map", height = "100%")
+  ),
+  
+  htmltools::div(
+    style = "flex: 0 0 auto; display: flex; justify-content: center; padding-top: 12px;",
+    htmltools::div(
+      style = "width: 420px;",
+      uiOutput("measure_range_ui")
+    )
+  )
+)
+```
+
+## Column {data-width="380"}
+
+### Top Interaction Counties
+
+```{r}
+observeEvent(
+  event_data("plotly_click", source = "bar_click", priority = "event"),
+  ignoreInit = TRUE,
+  {
+    click_data = event_data("plotly_click", source = "bar_click", priority = "event")
+    clicked_partner_fips = get_clicked_id(click_data)
+    
+    req(clicked_partner_fips)
+    
+    selected_partner_fips(clicked_partner_fips)
+    
+    partner_label = county_df |>
+      filter(county_fips == clicked_partner_fips) |>
+      pull(county_state)
+    
+    selected_partner_name(partner_label[1])
+  }
+)
+
+top_interaction_df = reactive({
+  clicked_fips = selected_county_fips()
+  
+  if (is.null(clicked_fips)) return(NULL)
+  
+  top_pairs_named |>
+    filter(pair_1_fips == clicked_fips | pair_2_fips == clicked_fips) |>
+    mutate(
+      partner_fips = if_else(pair_1_fips == clicked_fips, pair_2_fips, pair_1_fips),
+      partner_county = if_else(pair_1_fips == clicked_fips, pair_2_county_name, pair_1_county_name),
+      partner_state = if_else(pair_1_fips == clicked_fips, pair_2_state, pair_1_state),
+      partner_label = paste0(partner_county, ", ", partner_state)
+    ) |>
+    group_by(partner_fips, partner_county, partner_state, partner_label) |>
+    summarise(
+      total_exemptions = sum(total_exemptions, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    arrange(desc(total_exemptions)) |>
+    slice_head(n = 10) |>
+    arrange(total_exemptions) |>
+    mutate(
+      partner_label = factor(partner_label, levels = unique(partner_label)),
+      hover_text = paste0(
+        "State: ", partner_state,
+        "<br>County: ", partner_county
+      )
+    )
+})
+
+output$bar_chart = renderPlotly({
+  clicked_fips = selected_county_fips()
+  
+  if (is.null(clicked_fips)) {
+    return(
+      make_empty_plot(
+        message = "Click a county in Chart A first",
+        title = "Top Interaction Counties",
+        source = "bar_click"
+      )
+    )
+  }
+  
+  clicked_county_name = county_df |>
+    filter(county_fips == clicked_fips) |>
+    pull(county)
+  
+  clicked_county_name = clicked_county_name[1]
+  
+  df_bar = top_interaction_df()
+  req(!is.null(df_bar), nrow(df_bar) > 0)
+  
+  plot_ly(
+    data = df_bar,
+    source = "bar_click",
+    x = ~total_exemptions,
+    y = ~partner_label,
+    type = "bar",
+    orientation = "h",
+    customdata = ~partner_fips,
+    key = ~partner_fips,
+    hovertext = ~hover_text,
+    hovertemplate = paste0(
+      "%{hovertext}<br>",
+      "Total interaction: %{x:,}<extra></extra>"
+    )
+  ) |>
+    layout(
+      title = paste0("Top 10 Interaction Counties for ", clicked_county_name),
+      clickmode = "event+select",
+      xaxis = list(title = "Total interaction (exemptions)"),
+      yaxis = list(title = ""),
+      margin = list(l = 20, r = 20, t = 45, b = 40),
+      hoverlabel = list(align = "left")
+    ) |>
+    event_register("plotly_click")
+})
+
+plotlyOutput("bar_chart", height = "500px")
+```
+
+### County Feature Comparison
+
+```{r}
+feature_compare_data = reactive({
+  a_fips = selected_county_fips()
+  b_fips = selected_partner_fips()
+  
+  if (is.null(a_fips) || is.null(b_fips)) return(NULL)
+  
+  feature_base = county_df |>
+    mutate(
+      income_pctile = dplyr::percent_rank(median_household_income) * 100,
+      unemp_pctile = dplyr::percent_rank(unemp_percent) * 100,
+      pop_pctile = dplyr::percent_rank(population) * 100,
+      rent_pctile = dplyr::percent_rank(rent50_2) * 100,
+      young_pctile = dplyr::percent_rank(young_share) * 100
+    ) |>
+    filter(county_fips %in% c(a_fips, b_fips)) |>
+    distinct(county_fips, .keep_all = TRUE) |>
+    mutate(
+      full_label = county_state,
+      short_label = dplyr::case_when(
+        county == "District of Columbia" ~ "DC",
+        TRUE ~ county |>
+          stringr::str_remove(" County$") |>
+          stringr::str_remove(" Parish$") |>
+          stringr::str_remove(" Borough$") |>
+          stringr::str_remove(" Census Area$") |>
+          stringr::str_remove(" Municipality$")
+      )
+    )
+  
+  if (length(unique(feature_base$county_fips)) != 2) return(NULL)
+  if (!all(c(a_fips, b_fips) %in% feature_base$county_fips)) return(NULL)
+  
+  county_full_a = feature_base |> filter(county_fips == a_fips) |> pull(full_label)
+  county_full_b = feature_base |> filter(county_fips == b_fips) |> pull(full_label)
+  
+  scaled_long = feature_base |>
+    transmute(
+      county_short = short_label,
+      county_full = full_label,
+      county_name = county,
+      state_name = state,
+      `Median<br>income` = income_pctile,
+      `Unemployment<br>rate` = unemp_pctile,
+      `Population` = pop_pctile,
+      `Median<br>rent` = rent_pctile,
+      `Young<br>share` = young_pctile
+    ) |>
+    tidyr::pivot_longer(
+      cols = c(
+        `Median<br>income`,
+        `Unemployment<br>rate`,
+        `Population`,
+        `Median<br>rent`,
+        `Young<br>share`
+      ),
+      names_to = "feature",
+      values_to = "scaled_value"
+    )
+  
+  raw_long = feature_base |>
+    transmute(
+      county_short = short_label,
+      county_full = full_label,
+      county_name = county,
+      state_name = state,
+      `Median<br>income` = median_household_income,
+      `Unemployment<br>rate` = unemp_percent,
+      `Population` = population,
+      `Median<br>rent` = rent50_2,
+      `Young<br>share` = young_share
+    ) |>
+    tidyr::pivot_longer(
+      cols = c(
+        `Median<br>income`,
+        `Unemployment<br>rate`,
+        `Population`,
+        `Median<br>rent`,
+        `Young<br>share`
+      ),
+      names_to = "feature",
+      values_to = "raw_value"
+    )
+  
+  plot_df = scaled_long |>
+    dplyr::left_join(
+      raw_long,
+      by = c("county_short", "county_full", "county_name", "state_name", "feature")
+    ) |>
+    dplyr::mutate(
+      feature = factor(
+        feature,
+        levels = c(
+          "Median<br>income",
+          "Unemployment<br>rate",
+          "Population",
+          "Median<br>rent",
+          "Young<br>share"
+        )
+      ),
+      raw_label = purrr::map2_chr(feature, raw_value, format_feature_raw),
+      hover_text = paste0(
+        "State: ", state_name,
+        "<br>County: ", county_name,
+        "<br>Feature: ", clean_feature_name(feature),
+        "<br>Percentile among U.S. counties: ", round(scaled_value, 1),
+        "<br>Raw value: ", raw_label
+      )
+    )
+  
+  list(
+    base = feature_base,
+    plot = plot_df,
+    county_full_a = county_full_a[1],
+    county_full_b = county_full_b[1]
+  )
+})
+
+output$feature_compare = renderPlotly({
+  compare_obj = feature_compare_data()
+  
+  if (is.null(selected_county_fips())) {
+    return(make_empty_plot("Click a county in Chart A to start"))
+  }
+  
+  if (is.null(selected_partner_fips())) {
+    return(make_empty_plot("Now click a county in Chart B to compare features"))
+  }
+  
+  req(!is.null(compare_obj))
+  
+  plot_df = compare_obj$plot
+  county_full_a = compare_obj$county_full_a
+  county_full_b = compare_obj$county_full_b
+  
+  plot_ly(
+    data = plot_df,
+    x = ~feature,
+    y = ~scaled_value,
+    color = ~county_short,
+    type = "bar",
+    text = ~raw_label,
+    hovertext = ~hover_text,
+    hovertemplate = "%{hovertext}<extra></extra>"
+  ) |>
+    layout(
+      annotations = list(
+        list(
+          text = paste0(
+            "<b>", county_full_a, "</b>",
+            " vs ",
+            "<b>", county_full_b, "</b>"
+          ),
+          x = 0.02,
+          y = 1.06,
+          xref = "paper",
+          yref = "paper",
+          xanchor = "left",
+          yanchor = "bottom",
+          showarrow = FALSE,
+          align = "left",
+          font = list(size = 12, color = "#555555")
+        )
+      ),
+      barmode = "group",
+      xaxis = list(
+        title = "",
+        tickangle = 0,
+        automargin = TRUE,
+        tickfont = list(size = 12)
+      ),
+      yaxis = list(
+        title = "Percentile",
+        range = c(0, 100),
+        automargin = TRUE,
+        titlefont = list(size = 14),
+        tickfont = list(size = 11)
+      ),
+      legend = list(
+        orientation = "h",
+        x = 0.02,
+        y = -0.2,
+        xanchor = "left",
+        font = list(size = 12)
+      ),
+      margin = list(
+        l = 60,
+        r = 20,
+        t = 30,
+        b = 0
+      ),
+      hoverlabel = list(align = "left")
+    )
+})
+
+plotlyOutput("feature_compare", height = "560px")
+```
+
+```{r}
+# ---------- AI summary ----------
+
+build_ai_prompt = function(map_df, bar_df = NULL, compare_obj = NULL) {
+  selected_fips = selected_county_fips()
+  selected_partner = selected_partner_fips()
+  
+  map_rank_df = if (input$map_type == "net") {
+    map_df |> arrange(desc(abs(map_value)))
+  } else {
+    map_df |> arrange(desc(map_value))
+  }
+  
+  selected_row = tibble()
+  selected_rank = NA_integer_
+  
+  if (!is.null(selected_fips)) {
+    selected_row = map_df |>
+      filter(county_fips == selected_fips) |>
+      slice(1)
+    
+    if (nrow(selected_row) == 1) {
+      selected_rank = match(selected_fips, map_rank_df$county_fips)
+    }
+  }
+  
+  top_visible_df = map_rank_df |>
+    transmute(
+      county = county_state,
+      value = round(map_value, 2)
+    ) |>
+    slice_head(n = 5)
+  
+  selected_state = if (!is.null(selected_fips) && length(selected_fips) == 1) {
+  county_df |>
+    filter(county_fips == selected_fips) |>
+    pull(state) |>
+    safe_first(default = NA_character_)
+} else {
+  NA_character_
+}
+  
+  interaction_context = NULL
+  
+  if (!is.null(bar_df) && nrow(bar_df) > 0) {
+    bar_desc = bar_df |>
+      arrange(desc(total_exemptions))
+    
+    interaction_context = list(
+      selected_origin_county = selected_county_name(),
+      strongest_partner = safe_first(bar_desc$partner_label, NA_character_),
+      strongest_partner_value = safe_first(bar_desc$total_exemptions, NA_real_),
+      top1_share_of_top10 = round(100 * max(bar_desc$total_exemptions) / sum(bar_desc$total_exemptions), 1),
+      same_state_count_in_top10 = sum(bar_desc$partner_state == selected_state, na.rm = TRUE),
+      top_partners = dataframe_to_records(
+        bar_desc |>
+          transmute(
+            county = partner_label,
+            total_interaction = round(total_exemptions, 0)
+          )
+      )
+    )
+  }
+  
+  comparison_context = NULL
+  
+  if (!is.null(compare_obj)) {
+    gap_df = compare_obj$plot |>
+      mutate(feature_clean = clean_feature_name(as.character(feature))) |>
+      group_by(feature_clean) |>
+      summarise(
+        higher_county = county_full[which.max(scaled_value)],
+        lower_county = county_full[which.min(scaled_value)],
+        percentile_gap = round(diff(range(scaled_value)), 1),
+        .groups = "drop"
+      ) |>
+      arrange(desc(percentile_gap))
+    
+    comparison_context = list(
+      county_a = compare_obj$county_full_a,
+      county_b = compare_obj$county_full_b,
+      largest_gaps = dataframe_to_records(gap_df |> slice_head(n = 3)),
+      feature_values = dataframe_to_records(
+        compare_obj$plot |>
+          transmute(
+            county = county_full,
+            feature = clean_feature_name(as.character(feature)),
+            percentile = round(scaled_value, 1),
+            raw_value = raw_label
+          )
+      )
+    )
+  }
+  
+  context_list = list(
+    dashboard_state = list(
+      geography = if (input$state_choice == "all") "United States" else input$state_choice,
+      measure = safe_first(map_df$map_label, NA_character_),
+      range_min = input$measure_range[1],
+      range_max = input$measure_range[2],
+      visible_counties = nrow(map_df)
+    ),
+    map_view = list(
+      top_visible_counties = dataframe_to_records(top_visible_df),
+      selected_county = if (nrow(selected_row) == 1) {
+        list(
+          county = selected_row$county_state[[1]],
+          value = round(selected_row$map_value[[1]], 2),
+          visible_rank = selected_rank
+        )
+      } else {
+        NULL
+      }
+    ),
+    interaction_view = interaction_context,
+    comparison_view = comparison_context
+  )
+  
+  paste0(
+    "Current dashboard data:\n",
+    jsonlite::toJSON(
+      context_list,
+      auto_unbox = TRUE,
+      pretty = TRUE,
+      null = "null"
+    )
+  )
+}
+
+observeEvent(input$generate_ai_summary, {
+  ai_summary_text("Generating AI insight...")
+  
+  tryCatch({
+    map_df = filtered_map_df()
+    req(nrow(map_df) > 0)
+    
+    if (is.null(selected_county_fips()) || length(selected_county_fips()) == 0) {
+      stop("Please click a county in Chart A before generating the AI summary.")
+    }
+    
+    bar_df = top_interaction_df()
+    compare_obj = feature_compare_data()
+    
+    prompt_text = build_ai_prompt(
+      map_df = map_df,
+      bar_df = bar_df,
+      compare_obj = compare_obj
+    )
+    
+    summary_text = call_openai_summary(prompt_text)
+    ai_summary_text(summary_text)
+    
+  }, error = function(e) {
+    ai_summary_text(
+      paste(
+        "AI summary could not be generated.",
+        "",
+        conditionMessage(e),
+        sep = "\n"
+      )
+    )
+  })
+})
+
+output$ai_summary_box = renderUI({
+  tags$div(
+    style = paste(
+      "min-height: 220px;",
+      "max-height: 420px;",
+      "overflow-y: auto;",
+      "white-space: pre-wrap;",
+      "word-break: break-word;",
+      "background: #f8f9fa;",
+      "border: 1px solid #d9d9d9;",
+      "border-radius: 8px;",
+      "padding: 12px;",
+      "font-size: 14px;",
+      "line-height: 1.5;"
+    ),
+    ai_summary_text()
+  )
+})
+```
