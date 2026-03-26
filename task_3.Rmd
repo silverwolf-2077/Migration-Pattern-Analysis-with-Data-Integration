@@ -4,6 +4,7 @@ output:
   flexdashboard::flex_dashboard:
     orientation: columns
     vertical_layout: fill
+    source_code: https://github.com/silverwolf-2077/Migration-Pattern-Analysis-with-Data-Integration
 runtime: shiny
 ---
 
@@ -239,24 +240,23 @@ extract_response_text = function(resp_json) {
 }
 
 call_openai_summary = function(prompt_text) {
-  api_key = Sys.getenv("OPENAI_API_KEY")
-  model_name = Sys.getenv("OPENAI_MODEL", unset = "gpt-5.4-mini")
-  
-  if (api_key == "") {
-    stop("Missing OPENAI_API_KEY. Add it to your .Renviron and restart R.")
-  }
+  api_key = "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"
+  model_name = "gpt-5.4-mini"
   
   developer_prompt = paste(
-    "You are a migration dashboard analyst.",
-    "Use only the structured dashboard data provided.",
-    "Do not invent any facts or causes not supported by the data.",
-    "If a section is missing, skip it rather than guessing.",
-    "Return exactly 4 short bullets in plain text:",
-    "1) Map pattern",
-    "2) Interaction pattern",
-    "3) Feature comparison or plausible interpretation",
-    "4) Caution or limitation",
-    sep = " "
+  "You are a careful analyst summarizing the current dashboard state.",
+  "Focus on the currently selected county pair.",
+  "Write the response in plain text as exactly two paragraphs.",
+  "In the first paragraph, provide a short integrated analysis of the selected county pair.",
+  "Synthesize evidence from the map, the interaction chart, and the feature comparison rather than describing each chart separately.",
+  "Evaluate the pair's migration relationship and explain how their feature differences may help contextualize that relationship.",
+  "Use only the information provided in the dashboard state.",
+  "Do not invent facts or make strong causal claims.",
+  "If making interpretation, use cautious language such as 'may', 'might', or 'suggests'.",
+  "Keep the first paragraph concise, about 3 to 5 sentences.",
+  "In the second paragraph, write exactly one sentence beginning with 'Caution or limitation:'",
+  "Separate the two paragraphs with a blank line.",
+  "Do not use bullet points."
   )
   
   body_list = list(
@@ -308,6 +308,8 @@ call_openai_summary = function(prompt_text) {
   txt
 }
 ```
+
+# Dashboard
 
 ## Column {.sidebar data-width=320}
 
@@ -1037,3 +1039,71 @@ output$ai_summary_box = renderUI({
   )
 })
 ```
+
+# About
+
+## Column {data-width=500}
+
+### Documentation
+
+<h2 style="font-size: 28px; font-weight: 700; margin-top: 20px;">
+Project Overview
+</h2>
+
+The goal of this project was to translate a county-level migration analysis into an interactive web application that supports both exploration and interpretation. Rather than presenting the results only through static outputs, I aimed to build a dashboard that allows users to move from a broad geographic overview to more specific county relationships and then to a concise textual summary of the selected results.
+
+The project was designed not only to display the underlying analysis, but also to make it easier to navigate and interpret. By organizing the interface around a step-by-step exploratory workflow, the dashboard helps users identify patterns of interest, examine county-to-county migration connections, and place those relationships in a broader contextual framework.
+
+<h2 style="font-size: 28px; font-weight: 700; margin-top: 28px;">
+Dashboard Development
+</h2>
+
+The dashboard was developed by first preparing the migration data so that county-level and county-pair information could be used consistently across multiple linked views. This was necessary because the application was intended to function as a connected analytical workflow rather than as a set of separate charts.
+
+The application was built in R using flexdashboard with Shiny runtime. The first view provides a county-level overview of migration patterns under a selected measure. Once a county is selected, the second view updates to show the counties with the strongest migration interactions with that location. A third view then compares the selected county pair across several contextual features, allowing the user to move from broad pattern recognition to a more focused comparison. In this way, the dashboard was constructed to support progressive exploration, with each component building on the previous one.
+
+<h2 style="font-size: 28px; font-weight: 700; margin-top: 28px;">
+GenAI Integration and Prompt Design
+</h2>
+
+GenAI tools were used at two stages of the project. During development, I used ChatGPT to help think through how an AI-based feature could be incorporated in a way that fit the logic of the dashboard. This was useful in determining that a focused summary feature would integrate naturally with the existing exploratory workflow and support the way users move through the visual analysis.
+
+After the dashboard structure was established, I implemented a GenAI-based interpretation feature within the application. The code collects the current dashboard state, including the selected county, its major interaction counties, and the comparison results currently displayed, and converts this information into a structured prompt for the model. The generated response is then returned to the interface as a brief integrated analysis of the selected county pair, followed by a separate caution or limitation statement.
+
+To improve reliability, I used several prompt engineering techniques. The prompt was structured so that the model received clearly organized dashboard information rather than a vague request. I also explicitly instructed the model to rely only on the information provided, avoid unsupported claims, and synthesize the evidence across the available charts instead of describing them separately. In addition, the response format was constrained to two paragraphs: a short integrated interpretation followed by a separate caution or limitation. The prompt was also designed to use only the information currently available from the user’s selections, which helped reduce speculation when the dashboard state was incomplete.
+
+## Column {data-width=400}
+
+### Reflection
+
+<h2 style="font-size: 28px; font-weight: 700; margin-top: 28px;">
+GenAI Approach Discussion
+</h2>
+
+<h2 style="font-size: 28px; font-weight: 700; margin-top: 28px;">
+Advantages
+</h3>
+
+The GenAI approach used in this project was most valuable as an interpretive layer within an exploratory dashboard. Because the dashboard requires users to move across several linked views, including a map, an interaction chart, and a feature comparison, the AI-generated interpretation helped synthesize the current dashboard state into a short and more accessible narrative. This improved usability by reducing the effort required to read multiple visual components separately and by helping users connect migration patterns with contextual feature differences for the selected county pair.
+
+Another advantage of this approach is that the AI output is tied to the user’s own exploration path rather than to the dataset in general. The interpretation is generated from the currently selected county pair and the results displayed in the dashboard, which makes the output more specific and context-dependent than a generic project summary. In this sense, GenAI added value not by producing new analysis, but by making the existing analysis easier to interpret at the point of interaction.
+
+<h2 style="font-size: 28px; font-weight: 700; margin-top: 28px;">
+Limitations
+</h3>
+
+At the same time, this approach has several limitations. The quality of the generated interpretation depends heavily on prompt design and on the information made available to the model through the dashboard. The model only receives the structured information extracted from the current dashboard state, and this information is itself a reduced representation of a far more complex social and geographic reality. As a result, the generated interpretation is necessarily limited by the scope of those inputs and may not capture broader structural, historical, or policy-related factors that shape migration patterns. The model does not generate new evidence or independently evaluate explanations; it only reformulates the structured information passed to it. Therefore, the output should be understood as a guided interpretation of the displayed results rather than as an additional analytical finding.
+
+There are also important ethical considerations. One concern is the risk of overconfidence: AI-generated text can sound authoritative even when it is based only on limited dashboard inputs. This is especially relevant in migration analysis, where users may be tempted to read causal meaning into observed associations. To reduce this risk, I designed the feature to rely only on the information currently displayed, avoid unsupported claims, and end with a separate caution or limitation statement. Transparency is also important. Users should understand that the GenAI component is intended to support interpretation of the dashboard, not replace critical evaluation of the underlying data and analysis.
+
+
+
+
+
+
+
+
+
+
+
+

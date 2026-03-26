@@ -5,8 +5,6 @@ account: arwending
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 16980854
-bundleId: 11762626
+bundleId: 11759395
 url: https://arwending.shinyapps.io/MigrationDashboard/
 version: 1
-asMultiple: FALSE
-asStatic: FALSE
