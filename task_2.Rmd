@@ -731,15 +731,6 @@ Frequent demographic terms, including "black", "white", "immigrant", "asian", "m
 9. Los Angeles Times. (2005, April 15). *[Inland Empire Is True to Its Name](https://www.latimes.com/archives/la-xpm-2005-apr-15-me-census15-story.html)*.
 10. Los Angeles Times. (2004, September 30). *[O.C. Whites a Majority No Longer](https://www.latimes.com/archives/la-xpm-2004-sep-30-me-census30-story.html)*.  
 
-Export the data for dashboard making.
-
-```{r}
-saveRDS(analysis_df, "dashboard_data/analysis_df.rds")
-write_csv(top_pairs_named, "dashboard_data/top_pairs_named.csv")
-write_csv(top_in_migration, "dashboard_data/top_in_migration.csv")
-write_csv(top_out_migration, "dashboard_data/top_out_migration.csv")
-write_csv(words_df, "dashboard_data/words_df.csv")
-```
 
 
 
