@@ -6,7 +6,7 @@ This project analyzes U.S. county-to-county migration patterns and presents the 
 ## Task Coverage
 This project was developed to complete both **Task 2: Migration Pattern Analysis with Data Integration** and **Task 3: GenAI-Enhanced Interactive Dashboard**.
 
-For Task 2, the project identifies the county pairs with the strongest migration interactions, determines the counties with the highest in-migration and out-migration, calculates net migration for the New York metropolitan area, enriches the migration dataset with contextual variables, and analyzes migration-related themes from local news coverage.
+For Task 2, the project cleaned and analyzed U.S. county-to-county migration data to identify major migration patterns, enriched the dataset with county-level socioeconomic and demographic variables, modeled migration intensity using a negative binomial GAM, and applied NLP to local news coverage to extract common migration-related themes.
 
 For Task 3, the project extends these results into a public interactive dashboard that allows users to explore migration patterns visually and interactively, while also including a GenAI-powered insight generation feature.
 
@@ -21,10 +21,13 @@ A focused regional analysis was conducted for the New York metropolitan area to 
 ### 3. Data Enrichment
 To provide explanatory context for migration patterns, the original dataset was augmented with additional public variables, including economic, housing, and demographic indicators such as median household income, unemployment rate, rent, population size, age structure, and rural-urban classification.
 
-### 4. NLP Analysis of Local News
+### 4. Migration Modeling
+To better understand variation in county-level migration intensity, the project constructed a gross migration measure and used exploratory analysis together with a negative binomial generalized additive model (GAM) to examine how migration was associated with county characteristics such as income, rent, age structure, and rural-urban classification.
+
+### 5. NLP Analysis of Local News
 Relevant news articles from top migration counties were collected and analyzed using NLP methods to identify recurring themes related to migration. Common topics included housing affordability, employment opportunities, family considerations, and broader demographic change.
 
-### 5. GenAI-Enhanced Dashboard
+### 6. GenAI-Enhanced Dashboard
 An interactive dashboard was built using R Shiny and Plotly to present the key findings. Users can explore county-level migration patterns, inspect major county interactions, compare contextual features across counties, and generate AI-written summaries based on the current dashboard view.
 
 ## GenAI Feature
