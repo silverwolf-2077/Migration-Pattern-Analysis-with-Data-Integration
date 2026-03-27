@@ -45,8 +45,6 @@ This project demonstrates how migration data can be combined with contextual ind
 
 ## Data Sources
 
-## Data Sources
-
 - [U.S. Census Bureau: 2003 SAIPE State and County Estimates](https://www.census.gov/data/datasets/2003/demo/saipe/2003-state-and-county.html)
 - [U.S. Bureau of Labor Statistics: Labor force data by county, 2003 annual averages](https://www.bls.gov/lau/tables.htm)
 - [USDA Economic Research Service: 2003 Rural-Urban Continuum Codes](https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/documentation)
